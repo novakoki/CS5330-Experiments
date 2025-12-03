@@ -8,7 +8,7 @@ conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/ma
 conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
 conda create --name openmmlab python=3.8 -y
 conda activate openmmlab
-conda install pytorch torchvision -c pytorch
+conda install pytorch torchvision -c pytorch -y
 pip install -U openmim
 mim install mmengine
 mim install 'mmcv>=2.0.0rc4'
