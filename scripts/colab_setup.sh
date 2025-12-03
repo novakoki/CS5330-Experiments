@@ -1,42 +1,20 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Bootstrap a Colab runtime for the custom nuScenes experiments.
-# - Installs pinned dependencies
-# - Clones mmdetection3d and installs it in editable mode
-# - Generates custom split PKLs if the downloaded nuScenes blobs are present
-
-EXP_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MMD3D_DIR="${MMD3D_DIR:-/content/mmdetection3d}"
-DATA_ROOT="${DATA_ROOT:-$EXP_ROOT/data/nuscenes}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
-
-echo "[setup] Using EXP_ROOT=$EXP_ROOT"
-echo "[setup] Installing Python dependencies..."
-"$PYTHON_BIN" -m pip install --upgrade pip
-"$PYTHON_BIN" -m pip install -r "$EXP_ROOT/requirements.txt"
-
-if [ ! -d "$MMD3D_DIR" ]; then
-  echo "[setup] Cloning mmdetection3d into $MMD3D_DIR"
-  git clone --depth 1 https://github.com/open-mmlab/mmdetection3d.git "$MMD3D_DIR"
-else
-  echo "[setup] Found existing mmdetection3d at $MMD3D_DIR"
-fi
-
-pushd "$MMD3D_DIR" >/dev/null
-echo "[setup] Installing mmdetection3d in editable mode..."
-"$PYTHON_BIN" -m pip install -e .
-popd >/dev/null
-
-export PYTHONPATH="$MMD3D_DIR:$PYTHONPATH"
-echo "[setup] PYTHONPATH updated to include $MMD3D_DIR"
-
-if [ -d "$DATA_ROOT/samples/LIDAR_TOP" ]; then
-  echo "[setup] Creating custom split PKLs under $DATA_ROOT"
-  "$PYTHON_BIN" "$EXP_ROOT/scripts/create_custom_splits.py" --data-root "$DATA_ROOT"
-else
-  echo "[setup] Skipping split creation (LiDAR files not found at $DATA_ROOT/samples/LIDAR_TOP)."
-  echo "        Download v1.0-trainval_meta and blobs 01/02 into $DATA_ROOT then re-run this script."
-fi
-
-echo "[setup] Done. To train, export MMD3D_DIR=$MMD3D_DIR and run scripts/run_experiments.sh"
+mkdir -p ~/miniconda3
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda3/miniconda.sh
+bash ~/miniconda3/miniconda.sh -b -u -p ~/miniconda3
+rm ~/miniconda3/miniconda.sh
+source ~/miniconda3/bin/activate
+conda init --all
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+conda create --name openmmlab python=3.8 -y
+conda activate openmmlab
+conda install pytorch torchvision -c pytorch
+pip install -U openmim
+mim install mmengine
+mim install 'mmcv>=2.0.0rc4'
+mim install 'mmdet>=3.0.0'
+mim install "mmdet3d>=1.1.0"
+git clone https://github.com/open-mmlab/mmdetection3d.git
+cd mmdetection3d
+mim download mmdet3d --config pointpillars_hv_secfpn_8xb6-160e_kitti-3d-car --dest .
+python demo/pcd_demo.py demo/data/kitti/000008.bin pointpillars_hv_secfpn_8xb6-160e_kitti-3d-car.py hv_pointpillars_secfpn_6x8_160e_kitti-3d-car_20220331_134606-d42d15ed.pth --show
