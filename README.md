@@ -4,7 +4,7 @@ End-to-end lightweight PointPillars pipeline (PyTorch only) targeting the nuScen
 
 ## Setup
 - Install deps: `pip install torch torchvision torchaudio nuscenes-devkit matplotlib`
-- Download `v1.0-trainval_meta.tgz`, `v1.0-trainval01_blobs.tgz`, `v1.0-trainval02_blobs.tgz` from nuScenes; extract to `data/nuscenes/`.
+- Download `v1.0-trainval_meta.tgz`, `v1.0-trainval01_keyframes.tgz`, `v1.0-trainval02_keyframes.tgz` from nuScenes; extract to `data/nuscenes/` (keyframes-only is sufficient for this pipeline).
 - Generate splits: `python scripts/create_splits.py --data_root data/nuscenes --output_dir data/splits`
 - Optional Colab bootstrap: `bash scripts/colab_setup.sh`
 

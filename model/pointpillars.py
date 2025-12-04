@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.backbone import BaseBEVBackbone
+from model.backbone import BEVBackbone, FPNNeck
 from model.pillars import PillarFeatureNet, PointPillarsScatter, Voxelizer
 from utils.anchors import assign_targets, generate_anchors
 from utils.evaluation import nms_bev
@@ -20,7 +20,7 @@ class PointPillars(nn.Module):
         self.model_cfg = model_cfg
         self.num_classes = model_cfg.get("num_classes", 1)
         self.num_anchors_per_loc = len(model_cfg["anchor_rotations"]) * len(model_cfg["anchor_bottom_heights"])
-        self.feature_map_stride = 2
+        self.feature_map_stride = model_cfg.get("feature_map_stride", 2)
 
         self.voxelizer = Voxelizer(
             voxel_size=voxel_size,
@@ -38,16 +38,24 @@ class PointPillars(nn.Module):
             output_channels=model_cfg.get("pillar_features", 64),
             grid_size=grid_size,
         )
-        backbone_out_channels = model_cfg.get("middle_channels", 64) * 2
-        self.backbone = BaseBEVBackbone(
+        self.backbone = BEVBackbone(
             in_channels=model_cfg.get("pillar_features", 64),
-            mid_channels=model_cfg.get("middle_channels", 64),
-            out_channels=backbone_out_channels,
+            layer_nums=model_cfg.get("backbone_layer_nums", [3, 5, 5]),
+            layer_strides=model_cfg.get("backbone_strides", [2, 2, 2]),
+            out_channels=model_cfg.get("backbone_out_channels", [64, 128, 256]),
             use_batchnorm=model_cfg.get("use_batchnorm", True),
         )
-        self.conv_cls = nn.Conv2d(backbone_out_channels, self.num_anchors_per_loc * self.num_classes, kernel_size=1)
-        self.conv_box = nn.Conv2d(backbone_out_channels, self.num_anchors_per_loc * 7, kernel_size=1)
-        self.conv_dir_cls = nn.Conv2d(backbone_out_channels, self.num_anchors_per_loc * 2, kernel_size=1)
+        self.neck = FPNNeck(
+            in_channels=model_cfg.get("backbone_out_channels", [64, 128, 256]),
+            upsample_strides=model_cfg.get("neck_upsample_strides", [1, 2, 4]),
+            out_channels=model_cfg.get("neck_out_channels", [128, 128, 128]),
+            fuse_channels=model_cfg.get("head_channels", 256),
+            use_batchnorm=model_cfg.get("use_batchnorm", True),
+        )
+        head_in_channels = model_cfg.get("head_channels", 256)
+        self.conv_cls = nn.Conv2d(head_in_channels, self.num_anchors_per_loc * self.num_classes, kernel_size=1)
+        self.conv_box = nn.Conv2d(head_in_channels, self.num_anchors_per_loc * 7, kernel_size=1)
+        self.conv_dir_cls = nn.Conv2d(head_in_channels, self.num_anchors_per_loc * 2, kernel_size=1)
 
         self.register_buffer(
             "anchors",
@@ -93,7 +101,8 @@ class PointPillars(nn.Module):
         num_points = num_points.to(device)
         pillar_features = self.pillar_feature_net(voxels, num_points, coords[:, 1:])
         spatial_features = self.scatter(pillar_features, coords, batch_size)
-        feats = self.backbone(spatial_features)
+        feats_multi = self.backbone(spatial_features)
+        feats = self.neck(feats_multi)
         cls_preds = self.conv_cls(feats)
         box_preds = self.conv_box(feats)
         dir_preds = self.conv_dir_cls(feats)

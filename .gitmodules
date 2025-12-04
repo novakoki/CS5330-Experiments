@@ -1,0 +1,6 @@
+[submodule "PointPillars"]
+	path = PointPillars
+	url = https://github.com/zhulf0804/PointPillars
+[submodule "mmdetection3d"]
+	path = mmdetection3d
+	url = https://github.com/open-mmlab/mmdetection3d.git

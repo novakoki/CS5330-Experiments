@@ -40,7 +40,12 @@ config = {
         "anchor_rotations": [0, 1.5707963267948966],
         "anchor_bottom_heights": [-1.78],
         "pillar_features": 64,
-        "middle_channels": 64,
+        "backbone_layer_nums": [3, 5, 5],
+        "backbone_strides": [2, 2, 2],
+        "backbone_out_channels": [64, 128, 256],
+        "neck_upsample_strides": [1, 2, 4],
+        "neck_out_channels": [128, 128, 128],
+        "head_channels": 256,
         "use_batchnorm": True,
         "loss": {
             "alpha": 0.25,
@@ -64,4 +69,3 @@ config = {
     # Pretrained weights path for transfer setting (optional)
     "pretrained": None,
 }
-
