@@ -69,7 +69,8 @@ class NuScenesCarDataset(Dataset):
         self.class_name = class_name
         self.augmentations = augmentations or {}
         self.version = version
-        self.nusc = NuScenes(version=version, dataroot=data_root, verbose=False)
+        # lazy=True keeps meta on disk until accessed, saving host RAM
+        self.nusc = NuScenes(version=version, dataroot=data_root, verbose=False, lazy=True)
         with open(scene_list_path, "r") as f:
             self.scene_tokens = json.load(f)
         self.sample_tokens = self._collect_sample_tokens()
@@ -155,4 +156,3 @@ def collate_batch(batch: List[Dict]) -> Dict[str, List[torch.Tensor]]:
         "meta": [sample["meta"] for sample in batch],
     }
     return collated
-
