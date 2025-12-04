@@ -180,8 +180,19 @@ class NuScenesCarDataset(Dataset):
         self.version = version
         with open(scene_list_path, "r") as f:
             self.scene_tokens = json.load(f)
+        if len(self.scene_tokens) == 0:
+            raise ValueError(
+                f"Scene list at {scene_list_path} is empty. Regenerate it with scripts/create_splits.py "
+                f"or point the config at the correct splits JSON."
+            )
         self.nusc = NuScenesLite(data_root, version, self.scene_tokens)
         self.sample_tokens = self.nusc.sample_tokens
+        if len(self.sample_tokens) == 0:
+            raise ValueError(
+                "No LIDAR keyframes found for the provided scenes. "
+                f"Check that {data_root}/{version} contains the nuScenes keyframe metadata and LIDAR files "
+                f"and that the scene tokens in {scene_list_path} match the dataset version."
+            )
         self.grid_size = self._grid_size()
         copy_paste_path = copy_paste_db or os.path.join(data_root, "dbinfos_car.pkl")
         self.db_sampler = DatabaseSampler(copy_paste_path) if self.augmentations.get("copy_paste") else None
