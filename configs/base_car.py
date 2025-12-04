@@ -19,6 +19,8 @@ config = {
         # Scene token lists created by scripts/create_splits.py
         "train_scenes": "data/splits/custom_small_train.json",
         "val_scenes": "data/splits/custom_val.json",
+        # Optionally skip loading val split during training to save host RAM
+        "load_val": False,
         "class_name": "vehicle.car",
         "max_points_per_voxel": 32,
         "max_voxels": {"train": 12000, "val": 12000},

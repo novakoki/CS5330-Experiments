@@ -56,18 +56,20 @@ def build_dataloaders(cfg: Dict):
         class_name=dataset_cfg["class_name"],
         augmentations=dataset_cfg.get("augmentations", {}),
     )
-    val_dataset = NuScenesCarDataset(
-        data_root=dataset_cfg["data_root"],
-        scene_list_path=dataset_cfg["val_scenes"],
-        split="val",
-        point_cloud_range=dataset_cfg["point_cloud_range"],
-        voxel_size=dataset_cfg["voxel_size"],
-        max_points_per_voxel=dataset_cfg["max_points_per_voxel"],
-        max_voxels=dataset_cfg["max_voxels"]["val"],
-        class_name=dataset_cfg["class_name"],
-        augmentations={"rotation": False, "scaling": False, "flip": False, "copy_paste": False},
-    )
-    print(f"[build_dataloaders] dataset sizes: train={len(train_dataset)} val={len(val_dataset)}")
+    val_dataset = None
+    if dataset_cfg.get("load_val", True):
+        val_dataset = NuScenesCarDataset(
+            data_root=dataset_cfg["data_root"],
+            scene_list_path=dataset_cfg["val_scenes"],
+            split="val",
+            point_cloud_range=dataset_cfg["point_cloud_range"],
+            voxel_size=dataset_cfg["voxel_size"],
+            max_points_per_voxel=dataset_cfg["max_points_per_voxel"],
+            max_voxels=dataset_cfg["max_voxels"]["val"],
+            class_name=dataset_cfg["class_name"],
+            augmentations={"rotation": False, "scaling": False, "flip": False, "copy_paste": False},
+        )
+    print(f"[build_dataloaders] dataset sizes: train={len(train_dataset)} val={len(val_dataset) if val_dataset else 0}")
     print(f"[build_dataloaders] grid_size={train_dataset.grid_size}")
     train_loader = DataLoader(
         train_dataset,
@@ -79,16 +81,18 @@ def build_dataloaders(cfg: Dict):
         collate_fn=collate_batch,
         drop_last=True,
     )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=cfg["train"]["batch_size"],
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=False,
-        persistent_workers=num_workers > 0,
-        collate_fn=collate_batch,
-        drop_last=False,
-    )
+    val_loader = None
+    if val_dataset is not None:
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=cfg["train"]["batch_size"],
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=False,
+            persistent_workers=num_workers > 0,
+            collate_fn=collate_batch,
+            drop_last=False,
+        )
     return train_loader, val_loader, train_dataset.grid_size
 
 
@@ -196,7 +200,7 @@ def main():
                 )
         print(f"Epoch {epoch+1} done in {time.time()-start:.1f}s, avg loss {epoch_loss/len(train_loader):.4f}")
 
-        if (epoch + 1) % cfg.get("val_interval", 1) == 0:
+        if val_loader is not None and (epoch + 1) % cfg.get("val_interval", 1) == 0:
             val_map = run_validation(model, val_loader, device)
             print(f"Validation mAP@0.5: {val_map:.4f}")
             if val_map > best_map:
