@@ -8,7 +8,8 @@ config = {
     "log_interval": 10,
     "val_interval": 1,
     "save_every": 1,
-    "num_workers": 4,
+    # Keep dataloader single-worker to avoid high RAM use on Colab
+    "num_workers": 0,
     "amp": True,
     "grad_clip": 10.0,
     "work_dir": "outputs/base_car",

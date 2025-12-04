@@ -43,6 +43,7 @@ def load_config(path: str) -> Dict:
 
 def build_dataloaders(cfg: Dict):
     dataset_cfg = cfg["dataset"]
+    num_workers = cfg.get("num_workers", 0)
     train_dataset = NuScenesCarDataset(
         data_root=dataset_cfg["data_root"],
         scene_list_path=dataset_cfg["train_scenes"],
@@ -69,8 +70,9 @@ def build_dataloaders(cfg: Dict):
         train_dataset,
         batch_size=cfg["train"]["batch_size"],
         shuffle=True,
-        num_workers=cfg.get("num_workers", 4),
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=False,
+        persistent_workers=num_workers > 0,
         collate_fn=collate_batch,
         drop_last=True,
     )
@@ -78,8 +80,9 @@ def build_dataloaders(cfg: Dict):
         val_dataset,
         batch_size=cfg["train"]["batch_size"],
         shuffle=False,
-        num_workers=cfg.get("num_workers", 4),
-        pin_memory=True,
+        num_workers=num_workers,
+        pin_memory=False,
+        persistent_workers=num_workers > 0,
         collate_fn=collate_batch,
         drop_last=False,
     )
@@ -193,4 +196,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
