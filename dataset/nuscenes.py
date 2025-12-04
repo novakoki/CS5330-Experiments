@@ -84,13 +84,21 @@ class NuScenesLite:
         # Pre-index lidar sample_data tokens for our samples
         self.sample_to_lidar: Dict[str, str] = {}
         for sd in self.sample_data.values():
-            if sd["is_key_frame"] and sd["channel"] == "LIDAR_TOP" and sd["sample_token"] in self.sample_tokens:
-                self.sample_to_lidar[sd["sample_token"]] = sd["token"]
+            channel = sd.get("channel", "")
+            if channel != "LIDAR_TOP":
+                continue
+            if not sd.get("is_key_frame", False):
+                continue
+            stoken = sd.get("sample_token")
+            if stoken in self.sample_tokens:
+                self.sample_to_lidar[stoken] = sd["token"]
+        # Keep only samples that have a LIDAR_TOP keyframe
+        self.sample_tokens = [t for t in self.sample_tokens if t in self.sample_to_lidar]
         # Filter annotations to our samples and class
         anns = load_json(root / "sample_annotation.json")
         self.sample_annotations: Dict[str, List[Dict]] = {token: [] for token in self.sample_tokens}
         for ann in anns:
-            stoken = ann["sample_token"]
+            stoken = ann.get("sample_token")
             if stoken in self.sample_annotations:
                 self.sample_annotations[stoken].append(ann)
 
@@ -218,4 +226,3 @@ def collate_batch(batch: List[Dict]) -> Dict[str, List[torch.Tensor]]:
         "meta": [sample["meta"] for sample in batch],
     }
     return collated
-
