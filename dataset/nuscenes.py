@@ -72,12 +72,40 @@ class NuScenesLite:
         self.dataroot = Path(dataroot)
         self.version = version
         root = self.dataroot / version
-        # Load base tables
-        self.scenes = create_token_index(load_json(root / "scene.json"))
-        self.samples = create_token_index(load_json(root / "sample.json"))
-        self.sample_data = create_token_index(load_json(root / "sample_data.json"))
+        def log_mem(tag: str):
+            try:
+                import psutil  # type: ignore
+                rss_gb = psutil.Process().memory_info().rss / (1024 ** 3)
+                print(f"[NuScenesLite][mem] {tag}: {rss_gb:.2f} GB")
+            except Exception:
+                pass
+        # Load base tables (keep only needed keys to save RAM)
+        log_mem("before scene.json")
+        scenes_raw = load_json(root / "scene.json")
+        log_mem("after scene.json")
+        self.scenes = {rec["token"]: {"first_sample_token": rec["first_sample_token"]} for rec in scenes_raw}
+        samples_raw = load_json(root / "sample.json")
+        self.samples = {rec["token"]: {"next": rec["next"]} for rec in samples_raw}
+        log_mem("after sample.json")
+        sample_data_raw = load_json(root / "sample_data.json")
+        log_mem("after sample_data.json")
+        self.sample_data = {
+            rec["token"]: {
+                "token": rec["token"],
+                "is_key_frame": rec.get("is_key_frame", False),
+                "channel": rec.get("channel", ""),
+                "sample_token": rec.get("sample_token"),
+                "filename": rec.get("filename"),
+                "calibrated_sensor_token": rec.get("calibrated_sensor_token"),
+                "ego_pose_token": rec.get("ego_pose_token"),
+            }
+            for rec in sample_data_raw
+        }
+        del scenes_raw, samples_raw, sample_data_raw
+
         self.calibrated_sensors = create_token_index(load_json(root / "calibrated_sensor.json"))
         self.ego_poses = create_token_index(load_json(root / "ego_pose.json"))
+        log_mem("after calib/ego")
 
         self.scene_tokens = scene_tokens
         self.sample_tokens = self._collect_sample_tokens()
@@ -100,7 +128,15 @@ class NuScenesLite:
         for ann in anns:
             stoken = ann.get("sample_token")
             if stoken in self.sample_annotations:
-                self.sample_annotations[stoken].append(ann)
+                self.sample_annotations[stoken].append(
+                    {
+                        "translation": ann["translation"],
+                        "size": ann["size"],
+                        "rotation": ann["rotation"],
+                        "category_name": ann.get("category_name", ""),
+                    }
+                )
+        log_mem("after annotations")
 
     def _collect_sample_tokens(self) -> List[str]:
         tokens: List[str] = []

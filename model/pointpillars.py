@@ -134,14 +134,13 @@ class PointPillars(nn.Module):
         cls_preds, box_preds, dir_preds = self._flatten_preds(preds["cls_preds"], preds["box_preds"], preds["dir_preds"], self.num_classes)
         device = cls_preds.device
         anchors = self.anchors.to(device)
-        total_cls, total_box, total_dir, total_pos = 0.0, 0.0, 0.0, 0
+        total_cls, total_box, total_dir = 0.0, 0.0, 0.0
         for b in range(cls_preds.shape[0]):
             gt_boxes = batch["gt_boxes"][b].to(device)
             labels, bbox_targets, dir_targets = assign_targets(anchors, gt_boxes)
             positive_mask = labels == 1
             neg_mask = labels == 0
             num_pos = positive_mask.sum().clamp(min=1)
-            total_pos += int(num_pos.item())
             cls_target = torch.zeros_like(cls_preds[b])
             cls_target[positive_mask, 0] = 1.0
             alpha = loss_cfg.get("alpha", 0.25)
@@ -149,12 +148,10 @@ class PointPillars(nn.Module):
             cls_loss = self.focal_loss(cls_preds[b].squeeze(-1), cls_target.squeeze(-1), positive_mask | neg_mask, alpha, gamma)
             if positive_mask.any():
                 reg_loss = F.smooth_l1_loss(box_preds[b][positive_mask], bbox_targets[positive_mask], reduction="sum") / num_pos
-            else:
-                reg_loss = torch.tensor(0.0, device=device)
-            if positive_mask.any():
                 dir_pred = dir_preds[b][positive_mask]
                 dir_loss = F.cross_entropy(dir_pred, dir_targets[positive_mask], reduction="sum") / num_pos
             else:
+                reg_loss = torch.tensor(0.0, device=device)
                 dir_loss = torch.tensor(0.0, device=device)
             total_cls += cls_loss
             total_box += reg_loss * loss_cfg.get("bbox_weight", 2.0)
@@ -196,3 +193,4 @@ class PointPillars(nn.Module):
             keep = nms_bev(boxes, scores, iou_threshold=nms_thresh)
             batch_boxes.append({"boxes": boxes[keep], "scores": scores[keep]})
         return batch_boxes
+
