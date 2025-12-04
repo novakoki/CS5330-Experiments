@@ -92,7 +92,8 @@ class NuScenesLite:
         self.sample_data = {
             rec["token"]: {
                 "token": rec["token"],
-                "is_key_frame": rec.get("is_key_frame", False),
+                # Keyframe archives may omit is_key_frame; default to True.
+                "is_key_frame": rec.get("is_key_frame", True),
                 "channel": rec.get("channel", ""),
                 "sample_token": rec.get("sample_token"),
                 "filename": rec.get("filename"),
@@ -115,13 +116,14 @@ class NuScenesLite:
             channel = sd.get("channel", "")
             if channel != "LIDAR_TOP":
                 continue
-            if not sd.get("is_key_frame", False):
+            if not sd.get("is_key_frame", True):
                 continue
             stoken = sd.get("sample_token")
             if stoken in self.sample_tokens:
                 self.sample_to_lidar[stoken] = sd["token"]
         # Keep only samples that have a LIDAR_TOP keyframe
         self.sample_tokens = [t for t in self.sample_tokens if t in self.sample_to_lidar]
+        print(f"[NuScenesLite] collected sample_tokens={len(self.sample_tokens)} with lidar")
         # Filter annotations to our samples and class
         anns = load_json(root / "sample_annotation.json")
         self.sample_annotations: Dict[str, List[Dict]] = {token: [] for token in self.sample_tokens}
