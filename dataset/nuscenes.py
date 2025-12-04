@@ -95,6 +95,7 @@ class NuScenesLite:
                 # Keyframe archives may omit is_key_frame; default to True.
                 "is_key_frame": rec.get("is_key_frame", True),
                 "channel": rec.get("channel", ""),
+                "sensor_token": rec.get("sensor_token"),
                 "sample_token": rec.get("sample_token"),
                 "filename": rec.get("filename"),
                 "calibrated_sensor_token": rec.get("calibrated_sensor_token"),
@@ -104,9 +105,23 @@ class NuScenesLite:
         }
         del scenes_raw, samples_raw, sample_data_raw
 
+        # Sensor table is tiny; load for channel inference when missing from sample_data.
+        self.sensors = create_token_index(load_json(root / "sensor.json"))
         self.calibrated_sensors = create_token_index(load_json(root / "calibrated_sensor.json"))
         self.ego_poses = create_token_index(load_json(root / "ego_pose.json"))
         log_mem("after calib/ego")
+
+        # Fill missing channel names from sensor table or filename heuristic.
+        for sd in self.sample_data.values():
+            if sd.get("channel"):
+                continue
+            sensor_token = sd.get("sensor_token")
+            channel = self.sensors.get(sensor_token, {}).get("channel", "")
+            if not channel and sd.get("filename"):
+                fname = str(sd["filename"]).upper()
+                if "LIDAR_TOP" in fname:
+                    channel = "LIDAR_TOP"
+            sd["channel"] = channel
 
         self.scene_tokens = scene_tokens
         self.sample_tokens = self._collect_sample_tokens()
