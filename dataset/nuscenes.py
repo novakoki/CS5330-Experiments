@@ -142,13 +142,29 @@ class NuScenesLite:
 
     def _collect_sample_tokens(self) -> List[str]:
         tokens: List[str] = []
+        missing_scenes = 0
+        missing_samples = 0
         for scene_token in self.scene_tokens:
-            scene = self.scenes[scene_token]
-            sample_token = scene["first_sample_token"]
+            scene = self.scenes.get(scene_token)
+            if scene is None:
+                missing_scenes += 1
+                continue
+            sample_token = scene.get("first_sample_token")
+            if not sample_token:
+                missing_samples += 1
+                continue
             while sample_token:
                 tokens.append(sample_token)
-                sample = self.samples[sample_token]
-                sample_token = sample["next"]
+                sample = self.samples.get(sample_token)
+                if sample is None:
+                    missing_samples += 1
+                    break
+                sample_token = sample.get("next")
+        if missing_scenes or missing_samples:
+            print(
+                f"[NuScenesLite] skipped scenes: missing_scenes={missing_scenes} "
+                f"missing_samples={missing_samples}"
+            )
         return tokens
 
 
