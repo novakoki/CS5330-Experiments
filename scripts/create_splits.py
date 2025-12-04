@@ -30,7 +30,8 @@ def main():
 
     train_scenes = collect_scenes(nusc, splits.train)
     val_scenes = collect_scenes(nusc, splits.val)
-    small_train = sorted(train_scenes)[: args.small_train_count]
+    train_scenes = sorted(train_scenes)[:150]  # constrain to 150 scenes from blobs 01/02 subset
+    small_train = train_scenes[: args.small_train_count]
 
     with open(Path(args.output_dir) / "custom_full_train.json", "w") as f:
         json.dump(train_scenes, f)
@@ -46,4 +47,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
