@@ -44,6 +44,7 @@ def load_config(path: str) -> Dict:
 def build_dataloaders(cfg: Dict):
     dataset_cfg = cfg["dataset"]
     num_workers = cfg.get("num_workers", 0)
+    print(f"[build_dataloaders] loading splits train={dataset_cfg['train_scenes']} val={dataset_cfg['val_scenes']}")
     train_dataset = NuScenesCarDataset(
         data_root=dataset_cfg["data_root"],
         scene_list_path=dataset_cfg["train_scenes"],
@@ -66,6 +67,8 @@ def build_dataloaders(cfg: Dict):
         class_name=dataset_cfg["class_name"],
         augmentations={"rotation": False, "scaling": False, "flip": False, "copy_paste": False},
     )
+    print(f"[build_dataloaders] dataset sizes: train={len(train_dataset)} val={len(val_dataset)}")
+    print(f"[build_dataloaders] grid_size={train_dataset.grid_size}")
     train_loader = DataLoader(
         train_dataset,
         batch_size=cfg["train"]["batch_size"],
@@ -121,7 +124,19 @@ def main():
     set_seed(cfg.get("seed", 42), deterministic=cfg.get("deterministic", False))
     device = torch.device(args.device)
 
+    def log_mem(tag: str):
+        try:
+            import psutil  # type: ignore
+
+            process = psutil.Process()
+            rss_gb = process.memory_info().rss / (1024 ** 3)
+            print(f"[mem] {tag}: RSS={rss_gb:.2f} GB")
+        except Exception:
+            pass
+
+    log_mem("start")
     train_loader, val_loader, grid_size = build_dataloaders(cfg)
+    log_mem("after_dataloaders")
     model_cfg = cfg["model"]
     model_cfg["max_points_per_voxel"] = cfg["dataset"]["max_points_per_voxel"]
     model_cfg["max_voxels"] = cfg["dataset"]["max_voxels"]["train"]
