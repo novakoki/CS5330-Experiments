@@ -241,6 +241,13 @@ class NuScenesCarDataset(Dataset):
     def _load_points(self, lidar_token: str) -> np.ndarray:
         sd = self.nusc.sample_data[lidar_token]
         lidar_path = Path(self.data_root) / sd["filename"]
+        if not lidar_path.exists():
+            raise FileNotFoundError(
+                f"LiDAR file not found: {lidar_path}. "
+                "Verify that `data_root` points to the extracted nuScenes keyframe blobs "
+                "(e.g., v1.0-trainvalXX_keyframes) and that the file layout matches "
+                "`data_root/samples/LIDAR_TOP/<file>.pcd.bin`."
+            )
         points = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[:, :4]
         return points
 

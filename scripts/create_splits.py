@@ -17,6 +17,23 @@ def collect_scenes(nusc: NuScenes, target_split: List[str]) -> List[str]:
     return scene_tokens
 
 
+def scene_has_lidar(nusc: NuScenes, scene_token: str) -> bool:
+    """Return True if the first sample's LIDAR_TOP file exists on disk."""
+    scene = nusc.get("scene", scene_token)
+    sample_token = scene["first_sample_token"]
+    if not sample_token:
+        return False
+    sample = nusc.get("sample", sample_token)
+    sd_token = sample["data"].get("LIDAR_TOP")
+    if not sd_token:
+        return False
+    sd = nusc.get("sample_data", sd_token)
+    fname = sd.get("filename")
+    if not fname:
+        return False
+    return (Path(nusc.dataroot) / fname).exists()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", type=str, default="data/nuscenes", help="nuScenes data root")
@@ -30,7 +47,15 @@ def main():
 
     train_scenes = collect_scenes(nusc, splits.train)
     val_scenes = collect_scenes(nusc, splits.val)
-    train_scenes = sorted(train_scenes)[:150]  # constrain to 150 scenes from blobs 01/02 subset
+
+    # Filter to scenes whose first LIDAR keyframe file actually exists on disk
+    train_scenes_with_lidar = [t for t in train_scenes if scene_has_lidar(nusc, t)]
+    val_scenes_with_lidar = [t for t in val_scenes if scene_has_lidar(nusc, t)]
+    dropped_train = len(train_scenes) - len(train_scenes_with_lidar)
+    dropped_val = len(val_scenes) - len(val_scenes_with_lidar)
+
+    # Constrain to 150 scenes (blob 01/02 subset); adjust here if you downloaded more blobs.
+    train_scenes = sorted(train_scenes_with_lidar)[:150]
     small_train = train_scenes[: args.small_train_count]
 
     with open(Path(args.output_dir) / "custom_full_train.json", "w") as f:
@@ -40,9 +65,9 @@ def main():
     with open(Path(args.output_dir) / "custom_val.json", "w") as f:
         json.dump(val_scenes, f)
 
-    print(f"Custom-Full-Train scenes: {len(train_scenes)}")
+    print(f"Custom-Full-Train scenes: {len(train_scenes)} (dropped {dropped_train} missing LIDAR)")
     print(f"Custom-Small-Train scenes: {len(small_train)}")
-    print(f"Custom-Val scenes: {len(val_scenes)}")
+    print(f"Custom-Val scenes: {len(val_scenes)} (dropped {dropped_val} missing LIDAR)")
 
 
 if __name__ == "__main__":
