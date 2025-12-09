@@ -16,6 +16,7 @@ from nuscenes.utils.data_classes import Box as NuScenesBox
 
 from mmdet3d.models.layers import box3d_multiclass_nms
 from mmdet3d.registry import METRICS
+from mmdet3d.datasets.convert_utils import NuScenesNameMapping
 from mmdet3d.structures import (CameraInstance3DBoxes, LiDARInstance3DBoxes,
                                 bbox3d2result, xywhr2xyxyr)
 
@@ -95,6 +96,7 @@ class NuScenesMetric(BaseMetric):
                  format_only: bool = False,
                  jsonfile_prefix: Optional[str] = None,
                  eval_version: str = 'detection_cvpr_2019',
+                 classes: Optional[Union[List[str], Tuple[str, ...]]] = None,
                  collect_device: str = 'cpu',
                  backend_args: Optional[dict] = None) -> None:
         self.default_prefix = 'NuScenes metric'
@@ -114,6 +116,7 @@ class NuScenesMetric(BaseMetric):
             'None when format_only is True, otherwise the result files will '
             'be saved to a temp directory which will be cleanup at the end.'
 
+        self.override_classes = tuple(classes) if classes is not None else None
         self.jsonfile_prefix = jsonfile_prefix
         self.backend_args = backend_args
 
@@ -121,6 +124,35 @@ class NuScenesMetric(BaseMetric):
 
         self.eval_version = eval_version
         self.eval_detection_configs = config_factory(self.eval_version)
+        self.eval_split = None
+
+    def _get_eval_split(self) -> str:
+        """Infer the evaluation split passed to the NuScenes SDK.
+
+        The NuScenes devkit expects split names such as ``train``, ``val``,
+        ``test``, ``mini_train`` or ``mini_val`` instead of dataset version
+        strings. We try to read an explicit split from dataset metadata first
+        and fall back to inferring it from the annotation filename.
+        """
+        if self.dataset_meta is not None:
+            for key in ('eval_split', 'split'):
+                if key in self.dataset_meta:
+                    return self.dataset_meta[key]
+
+        filename = osp.basename(self.ann_file).lower() if self.ann_file else ''
+        if 'test' in filename:
+            return 'test'
+        if 'mini' in filename:
+            if 'train' in filename:
+                return 'mini_train'
+            if 'val' in filename:
+                return 'mini_val'
+            return 'mini_val'
+        if 'train' in filename:
+            return 'train'
+        if 'val' in filename:
+            return 'val'
+        return 'val'
 
     def process(self, data_batch: dict, data_samples: Sequence[dict]) -> None:
         """Process one batch of data samples and predictions.
@@ -158,11 +190,16 @@ class NuScenesMetric(BaseMetric):
         """
         logger: MMLogger = MMLogger.get_current_instance()
 
-        classes = self.dataset_meta['classes']
-        self.version = self.dataset_meta['version']
-        # load annotations
-        self.data_infos = load(
-            self.ann_file, backend_args=self.backend_args)['data_list']
+        classes = (self.dataset_meta or {}).get('classes',
+                                               tuple(self.NameMapping.values()))
+        self.version = (self.dataset_meta or {}).get('version', 'v1.0-trainval')
+        self.eval_split = self._get_eval_split()
+        if self.override_classes is not None:
+            classes = self.override_classes
+        # load annotations (support legacy infos PKL)
+        self.data_infos = self._load_data_infos()
+        self.token2info = {info['token']: info for info in self.data_infos}
+        self.idx2token = {info['sample_idx']: info['token'] for info in self.data_infos}
         result_dict, tmp_dir = self.format_results(results, classes,
                                                    self.jsonfile_prefix)
 
@@ -228,21 +265,39 @@ class NuScenesMetric(BaseMetric):
         """
         from nuscenes import NuScenes
         from nuscenes.eval.detection.evaluate import NuScenesEval
+        from nuscenes.eval.common import loaders as nusc_common_loaders  # type: ignore
 
         output_dir = osp.join(*osp.split(result_path)[:-1])
         nusc = NuScenes(
             version=self.version, dataroot=self.data_root, verbose=False)
-        eval_set_map = {
-            'v1.0-mini': 'mini_val',
-            'v1.0-trainval': 'val',
-        }
+        orig_create_splits = nusc_common_loaders.create_splits_scenes
+        custom_scene_names = None
+        try:
+            scene_tokens = set()
+            for info in self.data_infos:
+                sample = nusc.get('sample', info['token'])
+                scene_tokens.add(sample['scene_token'])
+            custom_scene_names = [
+                nusc.get('scene', tok)['name'] for tok in sorted(scene_tokens)
+            ]
+        except Exception:
+            custom_scene_names = None
+
+        def create_splits_scenes_patched(verbose: bool = False):
+            scene_splits = orig_create_splits(verbose)
+            if custom_scene_names is not None:
+                scene_splits[self.eval_split] = custom_scene_names
+            return scene_splits
+
+        nusc_common_loaders.create_splits_scenes = create_splits_scenes_patched
         nusc_eval = NuScenesEval(
             nusc,
             config=self.eval_detection_configs,
             result_path=result_path,
-            eval_set=eval_set_map[self.version],
+            eval_set=self.eval_split,
             output_dir=output_dir,
             verbose=False)
+        nusc_common_loaders.create_splits_scenes = orig_create_splits
         nusc_eval.main(render_curves=False)
 
         # record metrics
@@ -263,6 +318,107 @@ class NuScenesMetric(BaseMetric):
         detail[f'{metric_prefix}/NDS'] = metrics['nd_score']
         detail[f'{metric_prefix}/mAP'] = metrics['mean_ap']
         return detail
+
+    def _strip_prefix(self, path: str, preferred_prefix: str) -> str:
+        """Return a path relative to the preferred prefix if possible."""
+        abs_root = osp.abspath(self.data_root) if self.data_root else ""
+        abs_preferred = osp.abspath(osp.join(abs_root, preferred_prefix)) if preferred_prefix else abs_root
+        abs_path = path
+        if not osp.isabs(abs_path):
+            abs_path = osp.abspath(osp.join(abs_root, path))
+        if abs_preferred and abs_path.startswith(abs_preferred):
+            return osp.relpath(abs_path, abs_preferred)
+        if abs_root and abs_path.startswith(abs_root):
+            return osp.relpath(abs_path, abs_root)
+        return path
+
+    def _convert_legacy_info(self, legacy_info: dict, idx: int) -> dict:
+        """Adapt legacy ``infos`` format (lidar_path/gt_boxes) to new data_list."""
+        info = dict()
+        pts_prefix = 'samples/LIDAR_TOP'
+        sweeps_prefix = 'sweeps/LIDAR_TOP'
+
+        lidar_path = legacy_info['lidar_path']
+        info['lidar_points'] = dict(
+            lidar_path=self._strip_prefix(lidar_path, pts_prefix),
+            num_pts_feats=legacy_info.get('num_features', 5),
+        )
+
+        sweeps = []
+        for sweep in legacy_info.get('sweeps', []):
+            sweep_path = sweep['data_path']
+            sweeps.append(
+                dict(
+                    lidar_points=dict(lidar_path=self._strip_prefix(sweep_path, sweeps_prefix)),
+                    timestamp=sweep.get('timestamp', 0),
+                )
+            )
+        if sweeps:
+            info['lidar_sweeps'] = sweeps
+
+        info['timestamp'] = legacy_info.get('timestamp')
+        info['token'] = legacy_info.get('token')
+        # Convert quat+trans to 4x4 matrices expected by evaluation utils.
+        def rt_to_matrix(rotation, translation):
+            q = pyquaternion.Quaternion(rotation)
+            rot_mat = q.rotation_matrix
+            mat = np.eye(4)
+            mat[:3, :3] = rot_mat
+            mat[:3, 3] = translation
+            return mat
+
+        ego2global_mat = rt_to_matrix(
+            legacy_info.get('ego2global_rotation'),
+            legacy_info.get('ego2global_translation'),
+        )
+        lidar2ego_mat = rt_to_matrix(
+            legacy_info.get('lidar2ego_rotation'),
+            legacy_info.get('lidar2ego_translation'),
+        )
+        info['ego2global'] = ego2global_mat.tolist()
+        info['lidar2ego'] = lidar2ego_mat.tolist()
+        info['lidar_points']['lidar2ego'] = lidar2ego_mat.tolist()
+        info['sample_idx'] = idx
+
+        classes = (self.dataset_meta or {}).get('classes',
+                                               tuple(self.NameMapping.values()))
+        gt_boxes = legacy_info.get('gt_boxes', [])
+        gt_names = legacy_info.get('gt_names', [])
+        gt_velocity = legacy_info.get('gt_velocity', [])
+        num_lidar_pts = legacy_info.get('num_lidar_pts', [])
+        num_radar_pts = legacy_info.get('num_radar_pts', [])
+        valid_flag = legacy_info.get('valid_flag', [])
+
+        instances = []
+        for i, name in enumerate(gt_names):
+            bbox = gt_boxes[i]
+            mapped_name = NuScenesNameMapping.get(name, name)
+            label = classes.index(mapped_name) if mapped_name in classes else -1
+            instance = dict(
+                bbox_3d=bbox,
+                bbox_label_3d=label,
+                velocity=gt_velocity[i] if len(gt_velocity) > i else np.array([0.0, 0.0]),
+                num_lidar_pts=num_lidar_pts[i] if len(num_lidar_pts) > i else 0,
+                num_radar_pts=num_radar_pts[i] if len(num_radar_pts) > i else 0,
+                bbox_3d_isvalid=bool(valid_flag[i]) if len(valid_flag) > i else True,
+            )
+            instances.append(instance)
+        info['instances'] = instances
+        return info
+
+    def _load_data_infos(self) -> List[dict]:
+        annotations = load(self.ann_file, backend_args=self.backend_args)
+        if not isinstance(annotations, dict):
+            raise TypeError(f'The annotations loaded from annotation file should be a dict, '
+                            f'but got {type(annotations)}!')
+        if 'data_list' in annotations:
+            data_list = annotations['data_list']
+            for idx, info in enumerate(data_list):
+                info.setdefault('sample_idx', idx)
+            return data_list
+        if 'infos' in annotations:
+            return [self._convert_legacy_info(info, idx) for idx, info in enumerate(annotations['infos'])]
+        raise ValueError('Annotation must contain either data_list or infos/metadata keys')
 
     def format_results(
         self,
@@ -504,48 +660,54 @@ class NuScenesMetric(BaseMetric):
         nusc_annos = {}
 
         print('Start to convert detection format...')
-        for i, det in enumerate(mmengine.track_iter_progress(results)):
-            annos = []
-            boxes, attrs = output_to_nusc_box(det)
-            sample_idx = sample_idx_list[i]
-            sample_token = self.data_infos[sample_idx]['token']
-            boxes = lidar_nusc_box_to_global(self.data_infos[sample_idx],
-                                             boxes, classes,
-                                             self.eval_detection_configs)
-            for i, box in enumerate(boxes):
-                name = classes[box.label]
-                if np.sqrt(box.velocity[0]**2 + box.velocity[1]**2) > 0.2:
-                    if name in [
-                            'car',
-                            'construction_vehicle',
-                            'bus',
-                            'truck',
-                            'trailer',
-                    ]:
-                        attr = 'vehicle.moving'
-                    elif name in ['bicycle', 'motorcycle']:
-                        attr = 'cycle.with_rider'
-                    else:
-                        attr = self.DefaultAttribute[name]
-                else:
-                    if name in ['pedestrian']:
-                        attr = 'pedestrian.standing'
-                    elif name in ['bus']:
-                        attr = 'vehicle.stopped'
-                    else:
-                        attr = self.DefaultAttribute[name]
+        idx_to_det = {}
+        for det, idx in zip(results, sample_idx_list):
+            if idx not in idx_to_det:
+                idx_to_det[idx] = det
 
-                nusc_anno = dict(
-                    sample_token=sample_token,
-                    translation=box.center.tolist(),
-                    size=box.wlh.tolist(),
-                    rotation=box.orientation.elements.tolist(),
-                    velocity=box.velocity[:2].tolist(),
-                    detection_name=name,
-                    detection_score=box.score,
-                    attribute_name=attr)
-                annos.append(nusc_anno)
-            nusc_annos[sample_token] = annos
+        for sample_idx in mmengine.track_iter_progress(sorted(self.idx2token.keys())):
+            token = self.idx2token[sample_idx]
+            info = self.token2info[token]
+            det = idx_to_det.get(sample_idx, None)
+            annos = []
+            if det is not None:
+                boxes, attrs = output_to_nusc_box(det)
+                boxes = lidar_nusc_box_to_global(info, boxes, classes,
+                                                 self.eval_detection_configs)
+                for i, box in enumerate(boxes):
+                    name = classes[box.label]
+                    if np.sqrt(box.velocity[0]**2 + box.velocity[1]**2) > 0.2:
+                        if name in [
+                                'car',
+                                'construction_vehicle',
+                                'bus',
+                                'truck',
+                                'trailer',
+                        ]:
+                            attr = 'vehicle.moving'
+                        elif name in ['bicycle', 'motorcycle']:
+                            attr = 'cycle.with_rider'
+                        else:
+                            attr = self.DefaultAttribute[name]
+                    else:
+                        if name in ['pedestrian']:
+                            attr = 'pedestrian.standing'
+                        elif name in ['bus']:
+                            attr = 'vehicle.stopped'
+                        else:
+                            attr = self.DefaultAttribute[name]
+
+                    nusc_anno = dict(
+                        sample_token=token,
+                        translation=box.center.tolist(),
+                        size=box.wlh.tolist(),
+                        rotation=box.orientation.elements.tolist(),
+                        velocity=box.velocity[:2].tolist(),
+                        detection_name=name,
+                        detection_score=box.score,
+                        attribute_name=attr)
+                    annos.append(nusc_anno)
+            nusc_annos[token] = annos
         nusc_submissions = {
             'meta': self.modality,
             'results': nusc_annos,

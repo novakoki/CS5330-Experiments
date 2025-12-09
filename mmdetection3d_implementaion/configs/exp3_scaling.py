@@ -1,4 +1,6 @@
 from copy import deepcopy
+from datetime import datetime
+import os
 from pathlib import Path
 
 from mmengine.config import read_base
@@ -58,5 +60,9 @@ train_dataloader = deepcopy(base_train_dataloader)
 train_dataloader["dataset"]["ann_file"] = "custom_infos_full_train.pkl"
 train_dataloader["dataset"]["pipeline"] = train_pipeline
 
-work_dir = "../outputs/mmdet/exp3_scaling"
+run_suffix = os.environ.get("RUN_SUFFIX", datetime.now().strftime("%Y%m%d-%H%M%S"))
+work_dir = f"../outputs/mmdet/exp3_scaling/{run_suffix}"
 load_from = None
+
+del os
+del datetime

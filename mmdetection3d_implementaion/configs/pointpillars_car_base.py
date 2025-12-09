@@ -8,7 +8,10 @@ default_hooks = dict(
     timer=dict(type="IterTimerHook"),
     logger=dict(type="LoggerHook", interval=50),
     param_scheduler=dict(type="ParamSchedulerHook"),
-    checkpoint=dict(type="CheckpointHook", interval=-1),
+    checkpoint=dict(type="CheckpointHook", interval=1,
+        max_keep_ckpts=5,
+        save_best="auto",
+        rule="greater"),
     sampler_seed=dict(type="DistSamplerSeedHook"),
     visualization=dict(type="Det3DVisualizationHook"),
 )
@@ -21,8 +24,7 @@ log_processor = dict(type="LogProcessor", window_size=50, by_epoch=True)
 log_level = "INFO"
 load_from = None
 resume = False
-
-data_root = "../data/nuscenes/"
+data_root = "data/nuscenes/"
 class_names = ("car",)
 metainfo = dict(classes=class_names)
 
@@ -105,6 +107,7 @@ val_evaluator = dict(
     data_root=data_root,
     ann_file=data_root + "custom_infos_val.pkl",
     metric="bbox",
+    classes=class_names,
     backend_args=backend_args,
 )
 test_evaluator = val_evaluator
@@ -115,7 +118,7 @@ optim_wrapper = dict(
     clip_grad=dict(max_norm=10, norm_type=2),
 )
 
-max_epochs = 50
+max_epochs = 10
 param_scheduler = [
     dict(
         type="LinearLR",
@@ -137,11 +140,6 @@ param_scheduler = [
 train_cfg = dict(type="EpochBasedTrainLoop", max_epochs=max_epochs, val_interval=1)
 val_cfg = dict(type="ValLoop")
 test_cfg = dict(type="TestLoop")
-
-default_hooks = dict(
-    checkpoint=dict(type="CheckpointHook", interval=1, max_keep_ckpts=3),
-    logger=dict(type="LoggerHook", interval=10),
-)
 
 model = dict(
     type="MVXFasterRCNN",
@@ -198,7 +196,9 @@ model = dict(
         anchor_generator=dict(
             type="AlignedAnchor3DRangeGenerator",
             ranges=[[point_cloud_range[0], point_cloud_range[1], -1.78, point_cloud_range[3], point_cloud_range[4], -1.78]],
+            scales=[1, 2, 4],
             sizes=[[4.63, 1.97, 1.73]],
+            custom_values=[0, 0],
             rotations=[0, 1.57],
             reshape_out=True,
         ),
@@ -245,7 +245,7 @@ model = dict(
     ),
 )
 
-work_dir = "../outputs/mmdet/base_pointpillars_car"
+work_dir = "outputs/mmdet/base_pointpillars_car"
 
 # Convenience flag for later conditional logic in derived configs.
 db_info_path = Path(data_root) / "custom_dbinfos_train.pkl"

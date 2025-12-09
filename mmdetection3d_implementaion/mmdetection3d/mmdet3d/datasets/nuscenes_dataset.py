@@ -1,10 +1,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
+import os
 from os import path as osp
 from typing import Callable, List, Union
 
 import numpy as np
+from mmengine.fileio import load
+from mmengine.logging import print_log
 
 from mmdet3d.registry import DATASETS
+from mmdet3d.datasets.convert_utils import NuScenesNameMapping
 from mmdet3d.structures import LiDARInstance3DBoxes
 from mmdet3d.structures.bbox_3d.cam_box3d import CameraInstance3DBoxes
 from .det3d_dataset import Det3DDataset
@@ -189,6 +193,103 @@ class NuScenesDataset(Det3DDataset):
         ann_info['gt_bboxes_3d'] = gt_bboxes_3d
 
         return ann_info
+
+    def _strip_prefix(self, path: str, preferred_prefix: str) -> str:
+        """Return a path relative to the preferred prefix if possible."""
+        abs_root = osp.abspath(self.data_root) if self.data_root else ""
+        abs_preferred = osp.abspath(osp.join(abs_root, preferred_prefix)) if preferred_prefix else abs_root
+        abs_path = path
+        if not osp.isabs(abs_path):
+            abs_path = osp.abspath(osp.join(abs_root, path))
+        if abs_preferred and abs_path.startswith(abs_preferred):
+            return osp.relpath(abs_path, abs_preferred)
+        if abs_root and abs_path.startswith(abs_root):
+            return osp.relpath(abs_path, abs_root)
+        return path
+
+    def _convert_legacy_info(self, legacy_info: dict) -> dict:
+        """Adapt legacy ``infos`` format (lidar_path/gt_boxes) to new data_list."""
+        info = dict()
+        pts_prefix = self.data_prefix.get('pts', '')
+        sweeps_prefix = self.data_prefix.get('sweeps', '')
+
+        lidar_path = legacy_info['lidar_path']
+        info['lidar_points'] = dict(
+            lidar_path=self._strip_prefix(lidar_path, pts_prefix),
+            num_pts_feats=legacy_info.get('num_features', 5),
+        )
+
+        sweeps = []
+        for sweep in legacy_info.get('sweeps', []):
+            sweep_path = sweep['data_path']
+            sweeps.append(
+                dict(
+                    lidar_points=dict(lidar_path=self._strip_prefix(sweep_path, sweeps_prefix)),
+                    timestamp=sweep.get('timestamp', 0),
+                )
+            )
+        if sweeps:
+            info['lidar_sweeps'] = sweeps
+
+        info['timestamp'] = legacy_info.get('timestamp')
+        info['token'] = legacy_info.get('token')
+        info['ego2global'] = dict(
+            rotation=legacy_info.get('ego2global_rotation'),
+            translation=legacy_info.get('ego2global_translation'),
+        )
+        info['lidar2ego'] = dict(
+            rotation=legacy_info.get('lidar2ego_rotation'),
+            translation=legacy_info.get('lidar2ego_translation'),
+        )
+
+        gt_boxes = legacy_info.get('gt_boxes', [])
+        gt_names = legacy_info.get('gt_names', [])
+        gt_velocity = legacy_info.get('gt_velocity', [])
+        num_lidar_pts = legacy_info.get('num_lidar_pts', [])
+        num_radar_pts = legacy_info.get('num_radar_pts', [])
+        valid_flag = legacy_info.get('valid_flag', [])
+
+        instances = []
+        for idx, name in enumerate(gt_names):
+            bbox = gt_boxes[idx]
+            # Map nuScenes taxonomy to detection classes (e.g., vehicle.car -> car).
+            mapped_name = NuScenesNameMapping.get(name, name)
+            label = self.metainfo['classes'].index(mapped_name) if mapped_name in self.metainfo['classes'] else -1
+            instance = dict(
+                bbox_3d=bbox,
+                bbox_label_3d=label,
+                velocity=gt_velocity[idx] if len(gt_velocity) > idx else np.array([0.0, 0.0]),
+                num_lidar_pts=num_lidar_pts[idx] if len(num_lidar_pts) > idx else 0,
+                num_radar_pts=num_radar_pts[idx] if len(num_radar_pts) > idx else 0,
+                bbox_3d_isvalid=bool(valid_flag[idx]) if len(valid_flag) > idx else True,
+            )
+            instances.append(instance)
+        info['instances'] = instances
+
+        return info
+
+    def load_data_list(self) -> List[dict]:
+        """Support both new ``data_list`` format and legacy ``infos`` PKL."""
+        annotations = load(self.ann_file)
+        if not isinstance(annotations, dict):
+            raise TypeError(f'The annotations loaded from annotation file should be a dict, '
+                            f'but got {type(annotations)}!')
+
+        if 'data_list' in annotations and 'metainfo' in annotations:
+            metainfo = annotations['metainfo']
+            raw_data_list = annotations['data_list']
+            for k, v in metainfo.items():
+                self._metainfo.setdefault(k, v)
+            return [self.parse_data_info(info) for info in raw_data_list]
+
+        if 'infos' in annotations:
+            metainfo = annotations.get('metadata', {})
+            for k, v in metainfo.items():
+                self._metainfo.setdefault(k, v)
+            print_log('Loading legacy nuScenes infos format.', logger='current')
+            return [self.parse_data_info(self._convert_legacy_info(info)) for info in annotations['infos']]
+
+        raise ValueError('Annotation must contain either data_list/metainfo or infos/metadata keys')
 
     def parse_data_info(self, info: dict) -> Union[List[dict], dict]:
         """Process the raw data info.

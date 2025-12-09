@@ -24,10 +24,34 @@ ROOT = Path(__file__).resolve().parents[1]
 MMDET3D_DIR = ROOT / "mmdetection3d"
 sys.path.insert(0, str(MMDET3D_DIR))
 
-from tools.dataset_converters.nuscenes_converter import (  # noqa: E402
-    obtain_sensor2top,
-)
-from tools.dataset_converters.nuscenes_converter import get_available_scenes  # noqa: E402
+from tools.dataset_converters.nuscenes_converter import obtain_sensor2top  # noqa: E402
+
+
+def scene_has_all_lidar(nusc: NuScenes, scene_token: str) -> bool:
+    """Return True if every LIDAR_TOP file in the scene exists on disk."""
+    scene = nusc.get("scene", scene_token)
+    sample_token = scene["first_sample_token"]
+    while sample_token:
+        sample = nusc.get("sample", sample_token)
+        sd_token = sample["data"].get("LIDAR_TOP")
+        if not sd_token:
+            return False
+        sd = nusc.get("sample_data", sd_token)
+        fname = sd.get("filename")
+        if not fname or not (Path(nusc.dataroot) / fname).exists():
+            return False
+        sample_token = sample.get("next")
+    return True
+
+
+def get_available_scenes_skip_missing_lidar(nusc: NuScenes) -> List[dict]:
+    """Replica of the MMDet3D helper that tolerates scenes missing lidar."""
+    available_scenes = []
+    for scene in nusc.scene:
+        if scene_has_all_lidar(nusc, scene["token"]):
+            available_scenes.append(scene)
+    print(f"exist scene num: {len(available_scenes)} (dropped {len(nusc.scene) - len(available_scenes)} missing LIDAR)")
+    return available_scenes
 
 
 def load_scene_tokens(split_path: Path) -> List[str]:
@@ -85,7 +109,7 @@ def create_nuscenes_infos_skip_missing(
     else:
         raise ValueError("unknown version")
 
-    available_scenes = get_available_scenes(nusc)
+    available_scenes = get_available_scenes_skip_missing_lidar(nusc)
     available_scene_names = [s["name"] for s in available_scenes]
     train_scenes = list(filter(lambda x: x in available_scene_names, train_split_names))
     val_scenes = list(filter(lambda x: x in available_scene_names, val_split_names))
@@ -98,10 +122,15 @@ def create_nuscenes_infos_skip_missing(
             if sample["scene_token"] not in target_scenes:
                 continue
 
-            lidar_token = sample["data"]["LIDAR_TOP"]
+            lidar_token = sample["data"].get("LIDAR_TOP")
+            if not lidar_token:
+                continue
             lidar_path, boxes, _ = nusc.get_sample_data(lidar_token)
             lidar_path = str(lidar_path)
-            if not os.path.isabs(lidar_path):
+            # NuScenes returns paths already prefixed with the dataroot when it
+            # is supplied as a relative path. Guard against doubling it, which
+            # would falsely mark files as missing.
+            if not os.path.isabs(lidar_path) and not lidar_path.startswith(root_path):
                 lidar_path = os.path.join(root_path, lidar_path)
             if not os.path.exists(lidar_path):
                 continue
@@ -131,7 +160,7 @@ def create_nuscenes_infos_skip_missing(
             e2g_r_mat = Quaternion(e2g_r).rotation_matrix
 
             if max_sweeps > 0:
-                sd_rec = nusc.get("sample_data", sample["data"]["LIDAR_TOP"])
+                sd_rec = nusc.get("sample_data", lidar_token)
                 sweeps = []
                 while len(sweeps) < max_sweeps:
                     if sd_rec["prev"] == "":
